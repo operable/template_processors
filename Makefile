@@ -1,4 +1,7 @@
-.PHONY: ci compile test
+.PHONY: buildkite ci compile test
+
+buildkite:
+	docker build .
 
 ci: compile test
 

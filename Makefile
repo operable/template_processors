@@ -1,4 +1,6 @@
-.PHONY: compile test
+.PHONY: ci compile test
+
+ci: compile test
 
 compile:
 	mix deps.get

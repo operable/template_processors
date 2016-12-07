@@ -1,0 +1,7 @@
+steps:
+  - command: make compile
+    label: "Compile"
+    agents:
+      - queue=default
+  - command: make test
+    label: "Run unit tests"

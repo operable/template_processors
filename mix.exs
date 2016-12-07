@@ -25,7 +25,7 @@ defmodule TemplateProcessors.Mixfile do
     [
       {:poison, "~> 2.0"},
       {:table_rex, "~> 0.8"},
-      {:greenbar, github: "operable/greenbar", only: [:test]}
+      {:greenbar, github: "operable/greenbar"}
     ]
   end
 

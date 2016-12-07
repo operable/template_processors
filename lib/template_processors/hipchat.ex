@@ -7,11 +7,19 @@ defmodule TemplateProcessors.HipChatProcessor do
     render_directives(directives)
   end
 
+  defp render_directives(directives) do
+    directives
+    |> Enum.map_join(&process_directive/1) # Convert all Greenbar directives into their HipChat forms
+    |> reduce_block_padding                # Remove extra padding above li, ul, pre
+    |> String.replace(~r/(<br\/>)+\z/, "")
+  end
+
   defp process_directive(%{"name" => "attachment"}=attachment) do
-    @attachment_fields
+    rendered_body = @attachment_fields
     |> Enum.reduce([], &(render_attachment(&1, &2, attachment)))
     |> List.flatten
     |> Enum.join
+    rendered_body <> "<br/>"
   end
   defp process_directive(%{"name" => "text", "text" => text}),
     do: text
@@ -23,17 +31,20 @@ defmodule TemplateProcessors.HipChatProcessor do
     do: "<code>#{text}</code>"
   defp process_directive(%{"name" => "fixed_width_block", "text" => text}),
     do: "<pre>#{text}</pre>"
+  defp process_directive(%{"name" => "paragraph", "children" => children}) do
+      Enum.map_join(children, &process_directive/1) <> "<br/><br/>"
+  end
 
   defp process_directive(%{"name" => "newline"}), do: "<br/>"
 
   defp process_directive(%{"name" => "unordered_list", "children" => children}) do
     items = Enum.map_join(children, &process_directive/1)
-    "<ul>#{items}</ul>"
+    "<ul>#{items}</ul><br/>"
   end
 
   defp process_directive(%{"name" => "ordered_list", "children" => children}) do
     items = Enum.map_join(children, &process_directive/1)
-    "<ol>#{items}</ol>"
+    "<ol>#{items}</ol><br/>"
   end
 
   defp process_directive(%{"name" => "list_item", "children" => children}) do
@@ -47,21 +58,29 @@ defmodule TemplateProcessors.HipChatProcessor do
     "<li>#{item}</li>"
   end
 
-  defp process_directive(%{"name" => "table", "children" => children}) do
-    "<table>\n#{render(children)}</table>\n"
-  end
+  # Render table as text using TableRex instead of the HTML tags. The HipChat
+  # native table experience is very lacking in terms of style options. So much
+  # so that text tables are preferable. Note, tables MUST have a header.
 
-  defp process_directive(%{"name" => "table_header", "children" => children}) do
-    "<th>#{render(children)}</th>\n"
-  end
+  defp process_directive(%{"name" => "table",
+                           "children" => [%{"name" => "table_header",
+                                            "children" => header}|rows]}) do
+    headers = map(header)
 
-  defp process_directive(%{"name" => "table_row", "children" => children}) do
-    "<tr>#{render(children)}</tr>\n"
+    case map(rows) do
+      [] ->
+        # TableRex doesn't currently like tables without
+        # rows for some reason... so we get to render an
+        # empty table ourselves :/
+        "<pre>#{render_empty_table(headers)}</pre>"
+      rows ->
+        "<pre>#{TableRex.quick_render!(rows, headers)}</pre>"
+    end
   end
-
-  defp process_directive(%{"name" => "table_cell", "children" => children}) do
-    "<td>#{render(children)}</td>"
-  end
+  defp process_directive(%{"name" => "table_row", "children" => children}),
+    do: map(children)
+  defp process_directive(%{"name" => "table_cell", "children" => children}),
+    do: Enum.map_join(children, &process_directive/1)
 
   defp process_directive(%{"text" => text}=directive) do
     Logger.warn("Unrecognized directive; formatting as plain text: #{inspect directive}")
@@ -72,17 +91,12 @@ defmodule TemplateProcessors.HipChatProcessor do
     "<br/>Unrecognized directive: #{name}<br/>"
   end
 
-  defp render_directives(directives) do
-    directives
-    |> Enum.map_join(&process_directive/1) # Convert all Greenbar directives into their HipChat forms
-  end
-
   defp render_attachment("footer", acc, attachment) do
     case Map.get(attachment, "footer") do
       nil ->
         acc
       footer ->
-        ["<br/>#{footer}<br/>"|acc]
+        ["<br/>#{footer}"|acc]
     end
   end
   defp render_attachment("children", acc, attachment) do
@@ -90,7 +104,7 @@ defmodule TemplateProcessors.HipChatProcessor do
       nil ->
         acc
       children ->
-        [render(children)|acc]
+        [render(children) <> "<br/>"|acc]
     end
   end
   defp render_attachment("fields", acc, attachment) do
@@ -99,9 +113,9 @@ defmodule TemplateProcessors.HipChatProcessor do
         acc
       fields ->
         rendered_fields = fields
-        |> Enum.map(fn(%{"title" => title, "value" => value}) -> "<strong>#{title}:</strong> #{value}<br/>" end)
+        |> Enum.map(fn(%{"title" => title, "value" => value}) -> "<strong>#{title}:</strong><br/>#{value}<br/><br/>" end)
         |> Enum.join
-        [rendered_fields <> "<br/>"|acc]
+        [rendered_fields|acc]
     end
   end
   defp render_attachment("pretext", acc, attachment) do
@@ -127,11 +141,40 @@ defmodule TemplateProcessors.HipChatProcessor do
       title ->
         case Map.get(attachment, "title_url") do
           nil ->
-            ["<strong>#{title}</strong><br/><br/>"|acc]
+            ["<strong>#{title}</strong><br/>"|acc]
           url ->
-            ["<a href=\"#{url}\">title</a><br/><br/>"|acc]
+            ["<strong><a href=\"#{url}\">title</a></strong><br/>"|acc]
         end
     end
   end
 
+  # Shortcut for processing a list of directives without additional
+  # context, since it's so common
+  defp map(directives),
+    do: Enum.map(directives, &process_directive/1)
+
+  # This replicates the default TableRex style we use above
+  #
+  # Example:
+  #
+  #    +--------+------+
+  #    | Bundle | Name |
+  #    +--------+------+
+  #
+  defp render_empty_table(headers) do
+    separator_row = "+-#{Enum.map_join(headers, "-+-", &to_hyphens/1)}-+"
+
+    """
+    #{separator_row}
+    | #{Enum.join(headers, " | ")} |
+    #{separator_row}
+    """ |> String.strip
+  end
+
+  defp to_hyphens(name),
+    do: String.duplicate("-", String.length(name))
+
+  defp reduce_block_padding(string) do
+    String.replace(string, ~r{<br/>(<ul>|<ol>|<pre>)}, "\\1")
+  end
 end

@@ -18,6 +18,8 @@ defmodule TemplateProcessors.Mixfile do
   def application do
     [applications: [:logger,
                     :poison,
+                    :greenbar,
+                    :greenbar_markdown,
                     :table_rex]]
   end
 
